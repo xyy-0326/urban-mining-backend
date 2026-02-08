@@ -1,4 +1,5 @@
 # main.py
+import os
 from typing import Any, Dict, List, Optional
 
 from fastapi import FastAPI, Query, HTTPException
@@ -7,17 +8,19 @@ from neo4j import GraphDatabase
 from neo4j.exceptions import Neo4jError
 
 # --- Neo4j config ---
-NEO4J_URI = "bolt://127.0.0.1:7687"
-NEO4J_USER = "neo4j"
-NEO4J_PASSWORD = "kassel2026"
+NEO4J_URI = os.getenv("NEO4J_URI", "bolt://localhost:7687")
+NEO4J_USER = os.getenv("NEO4J_USER", "neo4j")
+NEO4J_PASSWORD = os.getenv("NEO4J_PASSWORD", "")
+if not NEO4J_PASSWORD:
+    raise RuntimeError("NEO4J_PASSWORD is not set")
 
 driver = GraphDatabase.driver(NEO4J_URI, auth=(NEO4J_USER, NEO4J_PASSWORD))
 
 app = FastAPI()
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_methods=["*"],
+    allow_origins=["https://urbanmining-kassel.vercel.app"],
+    allow_methods=["GET"],
     allow_headers=["*"],
 )
 
