@@ -1,60 +1,92 @@
 # main.py
 import os
 from typing import Any, Dict, List, Optional
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Query, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from neo4j import GraphDatabase
 from neo4j.exceptions import Neo4jError
 
-# --- Neo4j config ---
-NEO4J_URI = os.getenv("NEO4J_URI", "")
+# ----------------------------
+# Local-only dotenv (Render uses environment variables)
+# ----------------------------
+if os.getenv("ENVIRONMENT") != "production":
+    try:
+        from dotenv import load_dotenv  # type: ignore
+        load_dotenv()
+    except Exception:
+        pass
+
+# ----------------------------
+# Neo4j config (Aura required on Render)
+# ----------------------------
+NEO4J_URI = os.getenv("NEO4J_URI", "").strip()
 if not NEO4J_URI:
     raise RuntimeError("NEO4J_URI is not set (Aura required)")
 if not (NEO4J_URI.startswith("neo4j+s://") or NEO4J_URI.startswith("bolt+s://")):
     raise RuntimeError("Aura requires neo4j+s:// or bolt+s://")
-NEO4J_USER = os.getenv("NEO4J_USER", "neo4j")
-NEO4J_PASSWORD = os.getenv("NEO4J_PASSWORD", "")
+
+NEO4J_USER = os.getenv("NEO4J_USER", "neo4j").strip()
+NEO4J_PASSWORD = os.getenv("NEO4J_PASSWORD", "").strip()
 if not NEO4J_PASSWORD:
     raise RuntimeError("NEO4J_PASSWORD is not set")
 
-driver = GraphDatabase.driver(NEO4J_URI, auth=(NEO4J_USER, NEO4J_PASSWORD))
+# ----------------------------
+# FastAPI app + Neo4j driver lifecycle
+# ----------------------------
+driver = None  # set in lifespan
 
-@app.get("/health/neo4j")
-def neo4j_health():
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    global driver
+    driver = GraphDatabase.driver(NEO4J_URI, auth=(NEO4J_USER, NEO4J_PASSWORD))
     try:
-        with driver.session() as s:
-            row = s.run("RETURN 1 AS ok, db.name() AS db").single()
-            return {"status": "connected", "uri": NEO4J_URI, "db": row["db"]}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"{type(e).__name__}: {e}")
-    
+        yield
+    finally:
+        try:
+            driver.close()
+        except Exception:
+            pass
 
-app = FastAPI()
+
+app = FastAPI(lifespan=lifespan)
+
+# ----------------------------
+# CORS (add OPTIONS for preflight; include local dev origins)
+# ----------------------------
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["https://urbanmining-kassel.vercel.app"],
-    allow_methods=["GET"],
+    allow_origins=[
+        "https://urbanmining-kassel.vercel.app",
+        "http://localhost:3000",
+        "http://localhost:5173",
+    ],
+    allow_methods=["GET", "OPTIONS"],
     allow_headers=["*"],
 )
-
 
 # ---------- helpers ----------
 def _run_list(cypher: str, **params) -> List[Dict[str, Any]]:
     try:
-        with driver.session() as s:
+        with driver.session() as s:  # type: ignore[attr-defined]
             return [r.data() for r in s.run(cypher, **params)]
     except Neo4jError as e:
         raise HTTPException(status_code=503, detail=f"Neo4jError: {e.code}| {e.message}")
+    except Exception as e:
+        raise HTTPException(status_code=503, detail=f"Neo4jError: {type(e).__name__}: {e}")
 
 
 def _run_single(cypher: str, **params) -> Optional[Dict[str, Any]]:
     try:
-        with driver.session() as s:
+        with driver.session() as s:  # type: ignore[attr-defined]
             rec = s.run(cypher, **params).single()
             return rec.data() if rec else None
     except Neo4jError as e:
         raise HTTPException(status_code=503, detail=f"Neo4jError: {e.code}| {e.message}")
+    except Exception as e:
+        raise HTTPException(status_code=503, detail=f"Neo4jError: {type(e).__name__}: {e}")
 
 
 def _parse_fields(s: Optional[str]) -> List[str]:
@@ -70,6 +102,26 @@ def _pick_props(props: Dict[str, Any], fields: List[str]) -> Dict[str, Any]:
 def ping():
     # 不查 Neo4j：只要 FastAPI 存活就 ok
     return {"status": "ok"}
+
+
+@app.get("/health/neo4j")
+def neo4j_health():
+    try:
+        with driver.session() as s:  # type: ignore[attr-defined]
+            r = s.run("RETURN 1 AS ok").single()
+        return {"ok": True, "neo4j": True, "result": r["ok"]}
+    except Exception as e:
+        return {"ok": False, "neo4j": False, "error": str(e)}
+
+
+@app.get("/health/neo4j-count")
+def health_neo4j_count():
+    try:
+        with driver.session() as s:  # type: ignore[attr-defined]
+            r = s.run("MATCH (n) RETURN count(n) AS c").single()
+        return {"ok": True, "nodes": r["c"]}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
 
 
 @app.get("/linked_osm_ids")
