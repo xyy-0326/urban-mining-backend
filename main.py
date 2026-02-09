@@ -8,13 +8,27 @@ from neo4j import GraphDatabase
 from neo4j.exceptions import Neo4jError
 
 # --- Neo4j config ---
-NEO4J_URI = os.getenv("NEO4J_URI", "bolt://localhost:7687")
+NEO4J_URI = os.getenv("NEO4J_URI", "")
+if not NEO4J_URI:
+    raise RuntimeError("NEO4J_URI is not set (Aura required)")
+if not (NEO4J_URI.startswith("neo4j+s://") or NEO4J_URI.startswith("bolt+s://")):
+    raise RuntimeError("Aura requires neo4j+s:// or bolt+s://")
 NEO4J_USER = os.getenv("NEO4J_USER", "neo4j")
 NEO4J_PASSWORD = os.getenv("NEO4J_PASSWORD", "")
 if not NEO4J_PASSWORD:
     raise RuntimeError("NEO4J_PASSWORD is not set")
 
 driver = GraphDatabase.driver(NEO4J_URI, auth=(NEO4J_USER, NEO4J_PASSWORD))
+
+@app.get("/health/neo4j")
+def neo4j_health():
+    try:
+        with driver.session() as s:
+            row = s.run("RETURN 1 AS ok, db.name() AS db").single()
+            return {"status": "connected", "uri": NEO4J_URI, "db": row["db"]}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"{type(e).__name__}: {e}")
+    
 
 app = FastAPI()
 app.add_middleware(
