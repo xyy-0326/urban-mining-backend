@@ -60,6 +60,7 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=[
         "https://urbanmining-kassel.vercel.app",
+        "https://urban-mining-fronted.vercel.app",
         "https://urban-mining-fronted-uz6r.vercel.app",
         "http://localhost:3000",
         "http://localhost:5173",
